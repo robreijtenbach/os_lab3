@@ -57,4 +57,13 @@ int            edfs_new_inode             (edfs_image_t *img,
                                            edfs_inode_t *inode,
                                            edfs_inode_type_t type);
 
+/*
+ * returns bytes read, or negative value on error
+ */ 
+int            edfs_read_inode_data       (edfs_image_t *img,
+                                           edfs_inode_t *inode,
+                                           void         *buf,
+                                           uint32_t      size,
+                                           uint32_t      off);
+
 #endif /* __EDFS_COMMON_H__ */

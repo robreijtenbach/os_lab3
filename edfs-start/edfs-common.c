@@ -95,10 +95,45 @@ edfs_image_open(const char *filename, bool read_super)
   return img;
 }
 
+/*
+ * Inode-related routine helper functions
+ */
+
+/*
+ * read entire blk into blk_buf, assume blk_buf is large enough
+ * trailing bytes are 0 padded
+ */
+static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
+                                    uint32_t id, void *buf)
+{
+    const uint16_t BLK_SIZE = img->sb.block_size;
+
+    // TODO hele berg checks size etc.
+
+    edfs_block_t block;
+    if (id < EDFS_INODE_N_DIRECT_BLOCKS) {
+        block = inode->inode.direct[id];
+    }
+    else {
+        // TODO mag je zelf doen
+    }
+
+    // TODO kijen of het block wel past, dan 0 padden ofzo als je daar nog zin
+    // in hebt
+
+    // TODO klopt het nu wel?
+    //off_t off = block * BLK_SIZE + img->sb.inode_table_start + img->sb.inode_table_size;
+    off_t off = edfs_get_block_offset(&img->sb, block);
+    if (pread(img->fd, buf, BLK_SIZE, off) != BLK_SIZE)
+        return -1; // TODO goede error gebruiken
+
+    return BLK_SIZE;
+}
 
 /*
  * Inode-related routines
  */
+
 
 /* Read inode from disk, inode->inumber must be set to the inode number
  * to be read from disk.
@@ -194,3 +229,36 @@ edfs_new_inode(edfs_image_t *img,
 
   return 0;
 }
+
+int
+edfs_read_inode_data(edfs_image_t *img,
+                     edfs_inode_t *inode,
+                     void *buf,
+                     uint32_t size,
+                     uint32_t off)
+{
+    // TODO dingen verifoereren 
+
+    const uint16_t BLK_SIZE = img->sb.block_size;
+
+    for (uint32_t pos = off; pos < off + size; )
+    {
+        uint32_t blk_id = pos / BLK_SIZE;
+        uint32_t blk_off = pos % BLK_SIZE;
+        uint32_t blk_size = (off + size) - pos;
+        if (blk_size > BLK_SIZE - blk_off)
+            blk_size = BLK_SIZE - blk_off;
+
+        char blk_buf[EDFS_MAX_BLOCK_SIZE];
+        int ret = edfs_read_inode_data_blk(img, inode, blk_id, blk_buf);
+        if (ret < 0)
+            return ret;
+
+        memcpy(buf + (pos - off), blk_buf + blk_off, blk_size);
+
+        pos += blk_size;
+    }
+
+    return size;
+}
+

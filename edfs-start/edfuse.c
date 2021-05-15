@@ -94,6 +94,23 @@ edfs_find_inode(edfs_image_t *img,
            */
           bool found = false;
 
+          // TODO naar een eigen functie, maar dan even zien wat er nog moet 
+          // veranderen
+          uint32_t n_entries = inode->inode.size / sizeof(edfs_dir_entry_t);
+          fprintf(stderr, "iets\n");
+          for (uint32_t i = 0; i < n_entries; i++)
+          {
+              edfs_dir_entry_t tmp;
+              uint32_t off = i * sizeof(edfs_dir_entry_t);
+              if (!edfs_read_inode_data(img, inode, &tmp, sizeof(tmp), off))
+                  return false; // TODO goede error returnen?
+
+              if (strcmp(direntry.filename, tmp.filename) == 0) {
+                  found = true;
+                  break; // no need to keep searching
+              }
+          }
+
           if (found)
             {
               /* Found what we were looking for, now get our new inode. */
@@ -240,6 +257,19 @@ edfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
    * the filler function (as done above) for each entry. The second
    * argument of the filler function is the filename you want to add.
    */
+    if (!edfs_find_inode(img, path, &inode))
+        return -1; // TODO betere errror
+
+  uint32_t n_entries = inode.inode.size / sizeof(edfs_dir_entry_t);
+  for (uint32_t i = 0; i < n_entries; i++)
+  {
+      edfs_dir_entry_t tmp;
+      uint32_t off = i * sizeof(edfs_dir_entry_t);
+      if (!edfs_read_inode_data(img, &inode, &tmp, sizeof(tmp), off))
+          return -1; // TODO goede error returnen?
+
+        filler(buf, tmp.filename, NULL, 0);
+  }
 
   return 0;
 }
