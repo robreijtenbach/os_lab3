@@ -29,7 +29,7 @@ get_edfs_image(void)
 /* Helper function
  * checks if file or folder names are valid
  */
-static int check_name(const char *name)
+static int edfs_check_filename(const char *name)
 {
     if (name == NULL)
         return -EINVAL;
@@ -52,6 +52,32 @@ static int check_name(const char *name)
     return 0;
 }
 
+/*
+ * returns negative on error or the number of entries on success
+ * entries must be at least EDFS_MAX_DIR_ENTRIES
+*/
+static int edfs_get_dir_entries(edfs_image_t *img, edfs_inode_t *inode, edfs_dir_entry_t *entries)
+{
+    uint32_t n_entries = EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
+    int count = 0;
+    for (uint32_t i = 0; i < n_entries; i++)
+    {
+        edfs_dir_entry_t tmp;
+        uint32_t off = i * sizeof(edfs_dir_entry_t);
+        int ret = edfs_read_inode_data(img, inode, &tmp, sizeof(tmp), off);
+        if (ret < 0)
+            return ret;
+        else if (ret == 0)
+            continue;
+
+        if (tmp.inumber == EDFS_BLOCK_INVALID)
+            continue;
+
+        entries[count++] = tmp;
+    }
+
+    return count;
+}
 
 /* Searches the file system hierarchy to find the inode for
  * the given path. Returns true if the operation succeeded.
@@ -325,9 +351,6 @@ edfuse_mkdir(const char *path, mode_t mode)
      * Create a new inode, register in parent directory, write inode to
      * disk.
      */
-
-    // dit implementeren in deze branch
-
     return -ENOSYS;
 }
 
@@ -342,7 +365,36 @@ edfuse_rmdir(const char *path)
 
     // dit implementeren in deze branch
 
-    return -ENOSYS;
+    edfs_image_t *img = get_edfs_image();
+
+    int ret = edfs_check_filename(path);
+    if (ret != 0)
+        return ret;
+
+    edfs_inode_t inode;
+    if (!edfs_find_inode(img, path, &inode))
+        return -ENOENT;
+
+    // check if dirisempty
+    edfs_dir_entry_t entries[EDFS_MAX_DIR_ENTRIES];
+    ret = edfs_get_dir_entries(img, &inode, entries);
+    if (ret < 0)
+        return ret;
+    else if (ret != 0)
+        return -ENOTEMPTY;
+
+    edfs_inode_t parent_inode;
+    if (!edfs_get_parent_inode(img, path, &parent_inode))
+        return -EIO; // or ENOENT but this should not happen anyway
+
+
+    
+
+    // TODO remove in parent
+    // TODO set inode to free state
+    // TODO Free blocks in bitmap
+
+    return 0;
 }
 
 
