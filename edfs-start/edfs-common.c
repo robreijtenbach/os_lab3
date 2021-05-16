@@ -115,10 +115,9 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
         block = inode->inode.direct[id];
     }
     else {
-        // DONE? mag je zelf doen
         edfs_block_t indirect_block = inode->inode.indirect;
-        if (indirect_block == 0) //TODO (0 -> EDFS_BLOCK_INVALID)?
-            return -EIO; // TODO ik weet niet precies was hier een handige error voor is
+        if (indirect_block == EDFS_BLOCK_INVALID)
+            return -EIO;
         off_t indirect_block_off = edfs_get_block_offset(&img->sb, indirect_block);
 
         edfs_block_t indirect_blocks[EDFS_MAX_BLOCK_SIZE / sizeof(edfs_block_t)];
@@ -126,7 +125,7 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
 
         ssize_t ret = pread(img->fd, indirect_blocks, indirect_blocks_size, indirect_block_off);
         if (ret != indirect_blocks_size)
-            return -EIO; // DONE dit goed oplossen
+            return -EIO; 
 
         block = indirect_blocks[id - EDFS_INODE_N_DIRECT_BLOCKS];
     }
@@ -139,12 +138,10 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
     // TODO kijen of het block wel past, dan 0 padden ofzo als je daar nog zin
     // in hebt
 
-    // DONE klopt het nu wel?
-    //off_t off = block * BLK_SIZE + img->sb.inode_table_start + img->sb.inode_table_size;
     off_t off = edfs_get_block_offset(&img->sb, block);
     fprintf(stderr, "off = %d\n", (int)off);
     if (pread(img->fd, buf, BLK_SIZE, off) != BLK_SIZE)
-        return -1; // TODO goede error gebruiken
+        return -errno; 
 
     return BLK_SIZE;
 }
@@ -257,7 +254,7 @@ edfs_read_inode_data(edfs_image_t *img,
                      uint32_t size,
                      uint32_t off)
 {
-    // TODO dingen verifoereren 
+    // TODO dingen verifiereren 
 
     const uint16_t BLK_SIZE = img->sb.block_size;
     printf("blk _size %d\n", (int)BLK_SIZE);

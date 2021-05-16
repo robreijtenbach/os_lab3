@@ -16,10 +16,9 @@
 #include <errno.h>
 #include <unistd.h>
 #include <limits.h>
+#include <ctype.h>
 
 #include <stdbool.h>
-
-
 
 static inline edfs_image_t *
 get_edfs_image(void)
@@ -30,24 +29,26 @@ get_edfs_image(void)
 /* Helper function
  * checks if file or folder names are valid
  */
-int check_name(char *name)
+static int check_name(const char *name)
 {
-    len = strlen(name);
+    if (name == NULL)
+        return -EINVAL;
 
-    if (len > 59 || len <= 0) {
+    size_t len = strlen(name);
+
+    if (len > 59 || len == 0) {
         return -EINVAL;
     }
 
     for (size_t i = 0; i < len; i++) {
         char curr_char = name[i];
-        if ( isalpha(curr_char) ||
-             isdigit(curr_char) ||
-             curr_char == ' ' || 
-             curr_char == '.')
-            continue
-        else 
+        if (!(isalpha(curr_char) ||
+              isdigit(curr_char) ||
+              curr_char == ' ' || 
+              curr_char == '.'))
             return -EINVAL;
     }
+
     return 0;
 }
 
@@ -57,6 +58,8 @@ int check_name(char *name)
  *
  * IMPORTANT: TODO: this function is not yet complete, you have to
  * finish it! See below.
+ *
+ * or is it?????
  */
 static bool
 edfs_find_inode(edfs_image_t *img,
@@ -130,10 +133,10 @@ edfs_find_inode(edfs_image_t *img,
               int ret = edfs_read_inode_data(img, &current_inode, &tmp, sizeof(tmp), off);
               if (ret < 0) {
                   fprintf(stderr, "in find inode dat ding ging mis %d\n", (int)i);
-                  return false; // TODO goede error returnen?
+                  return false;
               }
               else if (ret == 0)
-                  continue; // this can happen we we try to read from an invalid block
+                  continue; // this can happen when we try to read from an invalid block
 
               if (tmp.inumber == 0)
                   continue; // empty file
@@ -142,7 +145,6 @@ edfs_find_inode(edfs_image_t *img,
                   direntry.inumber = tmp.inumber;
                   found = true;
                   break; // no need to keep searching
-                  // TODO hoe werkt git
               }
           }
 
@@ -449,23 +451,22 @@ edfuse_read(const char *path, char *buf, size_t size, off_t offset,
     if (!edfs_find_inode(img, path, &inode))
         return -ENOENT;
 
-    // TODO klopt dit wel?
-    /*
-    size_t begin = offset; 
-    size_t end = offset + size;
-    if (inode.inode.size <= begin) || inode.inode.size < end) {
-        return -EINVAL;
-    }
-    */
-
     if (inode.inode.size <= offset)
         return -EINVAL;
 
-    uint32_t bytes_to_read = size;
+    if (inode.inode.type == EDFS_INODE_TYPE_DIRECTORY)
+        return -EISDIR;
+    else if (inode.inode.type != EDFS_INODE_TYPE_FILE)
+        return -EIO; // can happen when fs is corrupted
+
+    size_t bytes_to_read = size;
     if (inode.inode.size - offset < size)
         bytes_to_read = inode.inode.size - offset;
 
-    return edfs_read_inode_data(img, &inode, buf, bytes_to_read, offset);
+    // note: because we check the size of bytes_to_read the value always
+    // fits into a uint32_t hence the cast is valid
+    // TODO kijken of deze claim klopt
+    return edfs_read_inode_data(img, &inode, buf, (uint32_t)bytes_to_read, offset);
 }
 
 static int
