@@ -96,16 +96,27 @@ edfs_find_inode(edfs_image_t *img,
 
           // TODO naar een eigen functie, maar dan even zien wat er nog moet 
           // veranderen
-          uint32_t n_entries = inode->inode.size / sizeof(edfs_dir_entry_t);
-          fprintf(stderr, "iets\n");
+          uint32_t n_entries = EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
+          fprintf(stderr, "inode %d n_entries %d\n", (int)current_inode.inumber, (int)n_entries);
           for (uint32_t i = 0; i < n_entries; i++)
           {
               edfs_dir_entry_t tmp;
               uint32_t off = i * sizeof(edfs_dir_entry_t);
-              if (!edfs_read_inode_data(img, inode, &tmp, sizeof(tmp), off))
+              // TODO het kan zijn dat deze call mis gaat omdat een block nie
+              // is geallocate, maar dan moet je die error negeren
+              int ret = edfs_read_inode_data(img, &current_inode, &tmp, sizeof(tmp), off);
+              if (ret < 0) {
+                  fprintf(stderr, "in find inode dat ding ging mis %d\n", (int)i);
                   return false; // TODO goede error returnen?
+              }
+              else if (ret == 0)
+                  continue; // this can happen we we try to read from an invalid block
+
+              if (tmp.inumber == 0)
+                  continue; // empty file
 
               if (strcmp(direntry.filename, tmp.filename) == 0) {
+                  direntry.inumber = tmp.inumber;
                   found = true;
                   break; // no need to keep searching
               }
@@ -241,37 +252,43 @@ static int
 edfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                off_t offset, struct fuse_file_info *fi)
 {
-  edfs_image_t *img = get_edfs_image();
-  edfs_inode_t inode = { 0, };
+    edfs_image_t *img = get_edfs_image();
+    edfs_inode_t inode = { 0, };
 
-  if (!edfs_find_inode(img, path, &inode))
+    if (!edfs_find_inode(img, path, &inode))
     return -ENOENT;
 
-  if (!edfs_disk_inode_is_directory(&inode.inode))
+    fprintf(stderr, "filename %s, inodenumbver %d\n", path, (int)inode.inumber);
+
+    if (!edfs_disk_inode_is_directory(&inode.inode))
     return -ENOTDIR;
 
-  filler(buf, ".", NULL, 0);
-  filler(buf, "..", NULL, 0);
+    filler(buf, ".", NULL, 0);
+    filler(buf, "..", NULL, 0);
 
-  /* TODO: traverse all valid directory entries of @inode and call
-   * the filler function (as done above) for each entry. The second
-   * argument of the filler function is the filename you want to add.
-   */
-    if (!edfs_find_inode(img, path, &inode))
-        return -1; // TODO betere errror
+    /* TODO: traverse all valid directory entries of @inode and call
+    * the filler function (as done above) for each entry. The second
+    * argument of the filler function is the filename you want to add.
+    */
 
-  uint32_t n_entries = inode.inode.size / sizeof(edfs_dir_entry_t);
-  for (uint32_t i = 0; i < n_entries; i++)
-  {
-      edfs_dir_entry_t tmp;
-      uint32_t off = i * sizeof(edfs_dir_entry_t);
-      if (!edfs_read_inode_data(img, &inode, &tmp, sizeof(tmp), off))
-          return -1; // TODO goede error returnen?
+    uint32_t n_entries = EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
+    for (uint32_t i = 0; i < n_entries; i++)
+    {
+        edfs_dir_entry_t tmp;
+        uint32_t off = i * sizeof(edfs_dir_entry_t);
+        int ret = edfs_read_inode_data(img, &inode, &tmp, sizeof(tmp), off);
+        if (ret < 0)
+            return -1; // TODO goede error returnen?
+        else if (ret == 0)
+            continue;
+
+        if (tmp.inumber == EDFS_BLOCK_INVALID)
+            continue;
 
         filler(buf, tmp.filename, NULL, 0);
-  }
+    }
 
-  return 0;
+    return 0;
 }
 
 static int
@@ -308,6 +325,7 @@ edfuse_getattr(const char *path, struct stat *stbuf)
   int res = 0;
   edfs_image_t *img = get_edfs_image();
 
+
   memset(stbuf, 0, sizeof(struct stat));
   if (strcmp(path, "/") == 0)
     {
@@ -317,10 +335,14 @@ edfuse_getattr(const char *path, struct stat *stbuf)
     }
 
   edfs_inode_t inode;
-  if (!edfs_find_inode(img, path, &inode))
+  if (!edfs_find_inode(img, path, &inode)) {
+      fprintf(stderr, "getattr %s faal\n", path);
     res = -ENOENT;
+  }
   else
     {
+  fprintf(stderr, "getattr %s %d\n", path, (int)inode.inumber);
+
       if (edfs_disk_inode_is_directory(&inode.inode))
         {
           stbuf->st_mode = S_IFDIR | 0770;

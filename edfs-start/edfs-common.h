@@ -12,7 +12,6 @@
 #include <stdbool.h>
 #include <unistd.h>
 
-
 /* Structure to use as handle to an opened image file. */
 typedef struct
 {
@@ -57,7 +56,7 @@ int            edfs_new_inode             (edfs_image_t *img,
                                            edfs_inode_t *inode,
                                            edfs_inode_type_t type);
 
-/*
+/* Attempt to read size bytes into buf
  * returns bytes read, or negative value on error
  */ 
 int            edfs_read_inode_data       (edfs_image_t *img,

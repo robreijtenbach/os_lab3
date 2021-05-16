@@ -110,13 +110,20 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
 
     // TODO hele berg checks size etc.
 
+
     edfs_block_t block;
     if (id < EDFS_INODE_N_DIRECT_BLOCKS) {
         block = inode->inode.direct[id];
     }
     else {
         // TODO mag je zelf doen
+        fprintf(stderr, "dit hoort niet te gebeuren\n");
     }
+
+    fprintf(stderr, "id == %d blocknumber = %d%c", (int)id, (int)block, '\n');
+
+    if (block == EDFS_BLOCK_INVALID)
+        return 0;
 
     // TODO kijen of het block wel past, dan 0 padden ofzo als je daar nog zin
     // in hebt
@@ -124,6 +131,7 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
     // TODO klopt het nu wel?
     //off_t off = block * BLK_SIZE + img->sb.inode_table_start + img->sb.inode_table_size;
     off_t off = edfs_get_block_offset(&img->sb, block);
+    fprintf(stderr, "off = %d\n", (int)off);
     if (pread(img->fd, buf, BLK_SIZE, off) != BLK_SIZE)
         return -1; // TODO goede error gebruiken
 
@@ -157,6 +165,7 @@ edfs_read_root_inode(edfs_image_t *img,
                      edfs_inode_t *inode)
 {
   inode->inumber = img->sb.root_inumber;
+  fprintf(stderr, "root inode = %d", (int)img->sb.root_inumber);
   return edfs_read_inode(img, inode);
 }
 
@@ -251,7 +260,7 @@ edfs_read_inode_data(edfs_image_t *img,
 
         char blk_buf[EDFS_MAX_BLOCK_SIZE];
         int ret = edfs_read_inode_data_blk(img, inode, blk_id, blk_buf);
-        if (ret < 0)
+        if (ret <= 0)
             return ret;
 
         memcpy(buf + (pos - off), blk_buf + blk_off, blk_size);
