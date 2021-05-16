@@ -119,6 +119,7 @@ edfs_find_inode(edfs_image_t *img,
                   direntry.inumber = tmp.inumber;
                   found = true;
                   break; // no need to keep searching
+                  // TODO hoe werkt git
               }
           }
 
