@@ -115,9 +115,9 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
         block = inode->inode.direct[id];
     }
     else {
-        // TODO mag je zelf doen
+        // DONE? mag je zelf doen
         edfs_block_t indirect_block = inode->inode.indirect;
-        if (indirect_block == 0)
+        if (indirect_block == 0) //TODO (0 -> EDFS_BLOCK_INVALID)?
             return -EIO; // TODO ik weet niet precies was hier een handige error voor is
         off_t indirect_block_off = edfs_get_block_offset(&img->sb, indirect_block);
 
@@ -126,7 +126,7 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
 
         ssize_t ret = pread(img->fd, indirect_blocks, indirect_blocks_size, indirect_block_off);
         if (ret != indirect_blocks_size)
-            return -1; // TODO dit goed oplossen
+            return -EIO; // DONE dit goed oplossen
 
         block = indirect_blocks[id - EDFS_INODE_N_DIRECT_BLOCKS];
     }
@@ -139,7 +139,7 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
     // TODO kijen of het block wel past, dan 0 padden ofzo als je daar nog zin
     // in hebt
 
-    // TODO klopt het nu wel?
+    // DONE klopt het nu wel?
     //off_t off = block * BLK_SIZE + img->sb.inode_table_start + img->sb.inode_table_size;
     off_t off = edfs_get_block_offset(&img->sb, block);
     fprintf(stderr, "off = %d\n", (int)off);

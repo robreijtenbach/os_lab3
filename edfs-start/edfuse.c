@@ -27,6 +27,29 @@ get_edfs_image(void)
   return (edfs_image_t *)fuse_get_context()->private_data;
 }
 
+/* Helper function
+ * checks if file or folder names are valid
+ */
+int check_name(char *name)
+{
+    len = strlen(name);
+
+    if (len > 59 || len <= 0) {
+        return -EINVAL;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        char curr_char = name[i];
+        if ( isalpha(curr_char) ||
+             isdigit(curr_char) ||
+             curr_char == ' ' || 
+             curr_char == '.')
+            continue
+        else 
+            return -EINVAL;
+    }
+    return 0;
+}
 
 
 /* Searches the file system hierarchy to find the inode for
