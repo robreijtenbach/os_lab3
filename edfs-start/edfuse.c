@@ -318,23 +318,29 @@ edfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 static int
 edfuse_mkdir(const char *path, mode_t mode)
 {
-  /* TODO: implement.
-   *
-   * Create a new inode, register in parent directory, write inode to
-   * disk.
-   */
-  return -ENOSYS;
+    /* TODO: implement.
+     *
+     * Create a new inode, register in parent directory, write inode to
+     * disk.
+     */
+
+    // dit implementeren in deze branch
+
+    return -ENOSYS;
 }
 
 static int
 edfuse_rmdir(const char *path)
 {
-  /* TODO: implement
-   *
-   * Validate @path exists and is a directory; remove directory entry
-   * from parent directory; release allocated blocks; release inode.
-   */
-  return -ENOSYS;
+    /* TODO: implement
+     *
+     * Validate @path exists and is a directory; remove directory entry
+     * from parent directory; release allocated blocks; release inode.
+     */
+
+    // dit implementeren in deze branch
+
+    return -ENOSYS;
 }
 
 
