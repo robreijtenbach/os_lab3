@@ -414,12 +414,29 @@ static int
 edfuse_read(const char *path, char *buf, size_t size, off_t offset,
             struct fuse_file_info *fi)
 {
-  /* TODO: implement
-   *
-   * Read @size bytes of data from @path starting at @offset and write
-   * this to @buf.
-   */
-  return -ENOSYS;
+    edfs_image_t *img = get_edfs_image();
+
+    edfs_inode_t inode;
+    if (!edfs_find_inode(img, path, &inode))
+        return -ENOENT;
+
+    // TODO klopt dit wel?
+    /*
+    size_t begin = offset; 
+    size_t end = offset + size;
+    if (inode.inode.size <= begin) || inode.inode.size < end) {
+        return -EINVAL;
+    }
+    */
+
+    if (inode.inode.size <= offset)
+        return -EINVAL;
+
+    uint32_t bytes_to_read = size;
+    if (inode.inode.size - offset < size)
+        bytes_to_read = inode.inode.size - offset;
+
+    return edfs_read_inode_data(img, &inode, buf, bytes_to_read, offset);
 }
 
 static int

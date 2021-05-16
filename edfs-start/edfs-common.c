@@ -249,6 +249,7 @@ edfs_read_inode_data(edfs_image_t *img,
     // TODO dingen verifoereren 
 
     const uint16_t BLK_SIZE = img->sb.block_size;
+    printf("blk _size %d\n", (int)BLK_SIZE);
 
     for (uint32_t pos = off; pos < off + size; )
     {
@@ -257,6 +258,9 @@ edfs_read_inode_data(edfs_image_t *img,
         uint32_t blk_size = (off + size) - pos;
         if (blk_size > BLK_SIZE - blk_off)
             blk_size = BLK_SIZE - blk_off;
+
+        fprintf(stderr, "reading blk = %d from %d to %d\n",
+            (int)blk_id, (int)blk_off, (int)(blk_off + blk_size));
 
         char blk_buf[EDFS_MAX_BLOCK_SIZE];
         int ret = edfs_read_inode_data_blk(img, inode, blk_id, blk_buf);
