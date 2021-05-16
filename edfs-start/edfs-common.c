@@ -108,8 +108,7 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
 {
     const uint16_t BLK_SIZE = img->sb.block_size;
 
-    // TODO hele berg checks size etc.
-
+    // TODO hele berg checks size etc. kijken of id niet te groot is
 
     edfs_block_t block;
     if (id < EDFS_INODE_N_DIRECT_BLOCKS) {
@@ -117,7 +116,19 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
     }
     else {
         // TODO mag je zelf doen
-        fprintf(stderr, "dit hoort niet te gebeuren\n");
+        edfs_block_t indirect_block = inode->inode.indirect;
+        if (indirect_block == 0)
+            return -EIO; // TODO ik weet niet precies was hier een handige error voor is
+        off_t indirect_block_off = edfs_get_block_offset(&img->sb, indirect_block);
+
+        edfs_block_t indirect_blocks[EDFS_MAX_BLOCK_SIZE / sizeof(edfs_block_t)];
+        int indirect_blocks_size = img->sb.block_size;
+
+        ssize_t ret = pread(img->fd, indirect_blocks, indirect_blocks_size, indirect_block_off);
+        if (ret != indirect_blocks_size)
+            return -1; // TODO dit goed oplossen
+
+        block = indirect_blocks[id - EDFS_INODE_N_DIRECT_BLOCKS];
     }
 
     fprintf(stderr, "id == %d blocknumber = %d%c", (int)id, (int)block, '\n');
