@@ -108,8 +108,10 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
 {
     const uint16_t BLK_SIZE = img->sb.block_size;
 
-    // TODO hele berg checks size etc. kijken of id niet te groot is
-
+    if (id > EDFS_INODE_N_DIRECT_BLOCKS &&
+            id >= (inode->inode.size + BLK_SIZE - 1) / BLK_SIZE)
+        return -EINVAL;
+    
     edfs_block_t block;
     if (id < EDFS_INODE_N_DIRECT_BLOCKS) {
         block = inode->inode.direct[id];
@@ -130,16 +132,10 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
         block = indirect_blocks[id - EDFS_INODE_N_DIRECT_BLOCKS];
     }
 
-    fprintf(stderr, "id == %d blocknumber = %d%c", (int)id, (int)block, '\n');
-
     if (block == EDFS_BLOCK_INVALID)
         return 0;
 
-    // TODO kijen of het block wel past, dan 0 padden ofzo als je daar nog zin
-    // in hebt
-
     off_t off = edfs_get_block_offset(&img->sb, block);
-    fprintf(stderr, "off = %d\n", (int)off);
     if (pread(img->fd, buf, BLK_SIZE, off) != BLK_SIZE)
         return -errno; 
 
@@ -151,7 +147,9 @@ static int edfs_write_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
 {
     const uint16_t BLK_SIZE = img->sb.block_size;
 
-    // TODO hele berg checks size etc. kijken of id niet te groot is
+    if (id > EDFS_INODE_N_DIRECT_BLOCKS &&
+            id >= (inode->inode.size + BLK_SIZE - 1) / BLK_SIZE)
+        return -EINVAL;
 
     edfs_block_t block;
     if (id < EDFS_INODE_N_DIRECT_BLOCKS) {
@@ -173,13 +171,10 @@ static int edfs_write_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
         block = indirect_blocks[id - EDFS_INODE_N_DIRECT_BLOCKS];
     }
 
-    fprintf(stderr, "id == %d blocknumber = %d%c", (int)id, (int)block, '\n');
-
     if (block == EDFS_BLOCK_INVALID)
         return 0;
 
     off_t off = edfs_get_block_offset(&img->sb, block);
-    fprintf(stderr, "off = %d\n", (int)off);
     if (pwrite(img->fd, buf, BLK_SIZE, off) != BLK_SIZE)
         return -errno; 
 
@@ -213,7 +208,6 @@ edfs_read_root_inode(edfs_image_t *img,
                      edfs_inode_t *inode)
 {
   inode->inumber = img->sb.root_inumber;
-  fprintf(stderr, "root inode = %d", (int)img->sb.root_inumber);
   return edfs_read_inode(img, inode);
 }
 
@@ -297,7 +291,6 @@ edfs_read_inode_data(edfs_image_t *img,
     // TODO dingen verifiereren 
 
     const uint16_t BLK_SIZE = img->sb.block_size;
-    printf("blk _size %d\n", (int)BLK_SIZE);
 
     for (uint32_t pos = off; pos < off + size; )
     {
@@ -306,9 +299,6 @@ edfs_read_inode_data(edfs_image_t *img,
         uint32_t blk_size = (off + size) - pos;
         if (blk_size > BLK_SIZE - blk_off)
             blk_size = BLK_SIZE - blk_off;
-
-        fprintf(stderr, "reading blk = %d from %d to %d\n",
-            (int)blk_id, (int)blk_off, (int)(blk_off + blk_size));
 
         char blk_buf[EDFS_MAX_BLOCK_SIZE];
         int ret = edfs_read_inode_data_blk(img, inode, blk_id, blk_buf);
@@ -333,7 +323,6 @@ edfs_write_inode_data(edfs_image_t *img,
     // TODO dingen verifiereren 
 
     const uint16_t BLK_SIZE = img->sb.block_size;
-    printf("blk _size %d\n", (int)BLK_SIZE);
 
     for (uint32_t pos = off; pos < off + size; )
     {
@@ -342,9 +331,6 @@ edfs_write_inode_data(edfs_image_t *img,
         uint32_t blk_size = (off + size) - pos;
         if (blk_size > BLK_SIZE - blk_off)
             blk_size = BLK_SIZE - blk_off;
-
-        fprintf(stderr, "writing blk = %d from %d to %d\n",
-            (int)blk_id, (int)blk_off, (int)(blk_off + blk_size));
 
         char blk_buf[EDFS_MAX_BLOCK_SIZE];
 
