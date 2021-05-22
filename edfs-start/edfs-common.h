@@ -64,5 +64,16 @@ int            edfs_read_inode_data       (edfs_image_t *img,
                                            void         *buf,
                                            uint32_t      size,
                                            uint32_t      off);
+int            edfs_write_inode_data      (edfs_image_t *img,
+                                           edfs_inode_t *inode,
+                                           const void   *buf,
+                                           uint32_t      size,
+                                           uint32_t      off);
+
+/* bitmap related routines */
+int             edfs_bitmap_clear         (edfs_image_t *img,
+                                           edfs_block_t block);
+int             edfs_bitmap_set           (edfs_image_t *img,
+                                           edfs_block_t block);
 
 #endif /* __EDFS_COMMON_H__ */

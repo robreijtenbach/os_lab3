@@ -20,14 +20,51 @@
 
 #include <stdbool.h>
 
+
+static int 
+edfs_remove_dir_entry(edfs_image_t *img, edfs_inode_t *inode, const char *name) 
+{
+    const uint32_t n_entries =
+        EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
+
+    for (uint32_t i = 0; i < n_entries; i++)
+    {
+        edfs_dir_entry_t tmp;
+        uint32_t off = i * sizeof(edfs_dir_entry_t);
+        int ret = edfs_read_inode_data(img, inode, &tmp, sizeof(tmp), off);
+        if (ret < 0)
+            return ret;
+        else if (ret == 0)
+            continue;
+
+        if (tmp.inumber == EDFS_BLOCK_INVALID)
+            continue;
+
+        if (strcmp(name, tmp.filename) == 0) {
+            // clear entry and write
+            memset(&tmp, 0, sizeof(tmp));
+            ret = edfs_write_inode_data(img, inode, &tmp, sizeof(tmp), off);
+            if (ret < 0)
+                return ret;
+            else if (ret == 0)
+                return -EIO;
+
+            return 0;
+        }
+    }
+
+    return -ENOENT;
+}
+
+
 static inline edfs_image_t *
 get_edfs_image(void)
 {
   return (edfs_image_t *)fuse_get_context()->private_data;
 }
 
-/* Helper function
- * checks if file or folder names are valid
+/* 
+ * Checks if file or folder names are valid
  */
 static int edfs_check_filename(const char *name)
 {
@@ -351,14 +388,21 @@ edfuse_mkdir(const char *path, mode_t mode)
      * Create a new inode, register in parent directory, write inode to
      * disk.
      */
+
+    edfs_image_t *img = get_edfs_image();
+
+    int ret = edfs_check_filename(path); //TODO cant check whole path
+    if (ret != 0)
+        return ret;
+
+
     return -ENOSYS;
 }
 
 static int
 edfuse_rmdir(const char *path)
 {
-    /* TODO: implement
-     *
+    /* 
      * Validate @path exists and is a directory; remove directory entry
      * from parent directory; release allocated blocks; release inode.
      */
@@ -367,32 +411,69 @@ edfuse_rmdir(const char *path)
 
     edfs_image_t *img = get_edfs_image();
 
-    int ret = edfs_check_filename(path);
-    if (ret != 0)
+    char *name = edfs_get_basename(path);
+    if (name == NULL)
+        return -ENOMSG;
+
+    int ret = edfs_check_filename(name); 
+    if (ret != 0) {
+        free(name);
         return ret;
+    }
 
     edfs_inode_t inode;
-    if (!edfs_find_inode(img, path, &inode))
+    if (!edfs_find_inode(img, path, &inode)) {
+        free(name);
         return -ENOENT;
+    }
 
     // check if dirisempty
     edfs_dir_entry_t entries[EDFS_MAX_DIR_ENTRIES];
     ret = edfs_get_dir_entries(img, &inode, entries);
-    if (ret < 0)
+    if (ret < 0) {
+        free(name);
         return ret;
-    else if (ret != 0)
+    }
+    else if (ret != 0) {
+        free(name);
         return -ENOTEMPTY;
+    }
+
+    fprintf(stderr, "line: %d\n", __LINE__);
 
     edfs_inode_t parent_inode;
-    if (!edfs_get_parent_inode(img, path, &parent_inode))
+    if (edfs_get_parent_inode(img, path, &parent_inode) != 0) {
+        free(name);
         return -EIO; // or ENOENT but this should not happen anyway
+    }
 
-
+    fprintf(stderr, "line: %d\n", __LINE__);
     
+    // remove in parent
+    if (edfs_remove_dir_entry(img, &parent_inode, name) != 0) {
+        free(name);
+        fprintf(stderr, "line: %d\n", __LINE__);
+        return -EIO;
+    }
 
-    // TODO remove in parent
-    // TODO set inode to free state
-    // TODO Free blocks in bitmap
+    fprintf(stderr, "line: %d\n", __LINE__);
+
+    free(name);
+
+    /* After this point the the FS is corrupted if any of the following operations fail */
+      
+    for (int i = 0; i < EDFS_INODE_N_DIRECT_BLOCKS; i++)
+    {
+        edfs_block_t block = inode.inode.direct[i];
+        if (block == EDFS_BLOCK_INVALID)
+            continue;
+
+        edfs_bitmap_clear(img, block);
+    }
+
+    // set inode to free state
+    if (edfs_clear_inode(img, &inode) <= 0)
+        return -EIO;
 
     return 0;
 }
