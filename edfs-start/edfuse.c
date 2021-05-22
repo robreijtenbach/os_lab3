@@ -16,9 +16,130 @@
 #include <errno.h>
 #include <unistd.h>
 #include <limits.h>
+#include <ctype.h>
 
 #include <stdbool.h>
 
+/* 
+ * Checks if file or folder names are valid
+ */
+static int edfs_check_filename(const char *name)
+{
+    if (name == NULL)
+        return -EINVAL;
+
+    size_t len = strlen(name);
+
+    if (len == 0) {
+        return -EINVAL;
+    } else if (len > 59) {
+        return -ENAMETOOLONG;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        char curr_char = name[i];
+        if (!(isalpha(curr_char) ||
+              isdigit(curr_char) ||
+              curr_char == ' ' || 
+              curr_char == '.'))
+            return -EINVAL;
+    }
+
+    return 0;
+}
+
+static int
+edfs_add_dir_entry(edfs_image_t *img, edfs_inode_t *inode,
+                   const char *name, edfs_inumber_t inumber)
+{
+    const uint32_t n_entries =
+        EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
+
+    int ret = edfs_check_filename(name);
+    if (ret != 0)
+        return ret;
+
+    uint32_t entry_off = UINT32_MAX;
+    for (uint32_t i = 0; i < n_entries; i++)
+    {
+        edfs_dir_entry_t tmp;
+        uint32_t off = i * sizeof(edfs_dir_entry_t);
+        ret = edfs_read_inode_data(img, inode, &tmp, sizeof(tmp), off);
+        if (ret < 0)
+            return ret;
+        else if (ret == 0) {
+            /*
+             * if ret == 0, we attempt to read from an unallocated block,
+             * thus we can store an new entry at this location
+             */
+            if (entry_off == UINT32_MAX)
+                entry_off = off;
+
+            continue;
+        }
+
+        if (tmp.inumber == EDFS_BLOCK_INVALID) {
+            if (entry_off == UINT32_MAX)
+                entry_off = off;
+            
+            continue;
+        }
+
+        if (strcmp(name, tmp.filename) == 0)
+            return -EEXIST;
+    }
+
+    if (entry_off == UINT32_MAX)
+        return -ENOMSG;
+
+    edfs_dir_entry_t tmp;
+    tmp.inumber = inumber;
+    strcpy(tmp.filename, name);
+    ret = 0;
+    ret = edfs_write_inode_data(img, inode, &tmp, sizeof(tmp), entry_off);
+    if (ret < 0)
+        return ret;
+    else if (ret != sizeof(tmp))
+        return -EIO;
+
+    return 0;
+}
+
+static int 
+edfs_remove_dir_entry(edfs_image_t *img, edfs_inode_t *inode, const char *name) 
+{
+    const uint32_t n_entries =
+        EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
+
+    for (uint32_t i = 0; i < n_entries; i++)
+    {
+
+        edfs_dir_entry_t tmp;
+        uint32_t off = i * sizeof(edfs_dir_entry_t);
+        int ret = edfs_read_inode_data(img, inode, &tmp, sizeof(tmp), off);
+        if (ret < 0)
+            return ret;
+        else if (ret == 0)
+            continue;
+
+        if (tmp.inumber == EDFS_BLOCK_INVALID)
+            continue;
+
+        if (strcmp(name, tmp.filename) == 0) {
+            // clear entry and write
+            memset(&tmp, 0, sizeof(tmp));
+            ret = edfs_write_inode_data(img, inode, &tmp, sizeof(tmp), off);
+            if (ret < 0)
+                return ret;
+            else if (ret == 0)
+                return -EIO;
+
+            return 0;
+        }
+    }
+
+    return -ENOENT;
+}
 
 
 static inline edfs_image_t *
@@ -27,36 +148,36 @@ get_edfs_image(void)
   return (edfs_image_t *)fuse_get_context()->private_data;
 }
 
-/* Helper function
- * checks if file or folder names are valid
- */
-int check_name(char *name)
+
+/*
+ * returns negative on error or the number of entries on success
+ * entries must be at least EDFS_MAX_DIR_ENTRIES
+*/
+static int edfs_get_dir_entries(edfs_image_t *img, edfs_inode_t *inode, edfs_dir_entry_t *entries)
 {
-    len = strlen(name);
+    uint32_t n_entries = EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
+    int count = 0;
+    for (uint32_t i = 0; i < n_entries; i++)
+    {
+        edfs_dir_entry_t tmp;
+        uint32_t off = i * sizeof(edfs_dir_entry_t);
+        int ret = edfs_read_inode_data(img, inode, &tmp, sizeof(tmp), off);
+        if (ret < 0)
+            return ret;
+        else if (ret == 0)
+            continue;
 
-    if (len > 59 || len <= 0) {
-        return -EINVAL;
+        if (tmp.inumber == EDFS_BLOCK_INVALID)
+            continue;
+
+        entries[count++] = tmp;
     }
 
-    for (size_t i = 0; i < len; i++) {
-        char curr_char = name[i];
-        if ( isalpha(curr_char) ||
-             isdigit(curr_char) ||
-             curr_char == ' ' || 
-             curr_char == '.')
-            continue
-        else 
-            return -EINVAL;
-    }
-    return 0;
+    return count;
 }
-
 
 /* Searches the file system hierarchy to find the inode for
  * the given path. Returns true if the operation succeeded.
- *
- * IMPORTANT: TODO: this function is not yet complete, you have to
- * finish it! See below.
  */
 static bool
 edfs_find_inode(edfs_image_t *img,
@@ -106,34 +227,20 @@ edfs_find_inode(edfs_image_t *img,
 
       if (direntry.filename[0] != 0)
         {
-          /* TODO: visit the directory entries of parent_inode and look
-           * for a directory entry with the same filename as
-           * direntry.filename. If found, fill in direntry.inumber with
-           * the corresponding inode number.
-           *
-           * Write a generic function which visits directory entries,
-           * you are going to need this more often. Consider implementing
-           * a callback mechanism.
-           */
           bool found = false;
 
-          // TODO naar een eigen functie, maar dan even zien wat er nog moet 
-          // veranderen
-          uint32_t n_entries = EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
-          fprintf(stderr, "inode %d n_entries %d\n", (int)current_inode.inumber, (int)n_entries);
+          const uint32_t n_entries =
+            EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
           for (uint32_t i = 0; i < n_entries; i++)
           {
               edfs_dir_entry_t tmp;
               uint32_t off = i * sizeof(edfs_dir_entry_t);
-              // TODO het kan zijn dat deze call mis gaat omdat een block nie
-              // is geallocate, maar dan moet je die error negeren
               int ret = edfs_read_inode_data(img, &current_inode, &tmp, sizeof(tmp), off);
               if (ret < 0) {
-                  fprintf(stderr, "in find inode dat ding ging mis %d\n", (int)i);
-                  return false; // TODO goede error returnen?
+                  return false;
               }
               else if (ret == 0)
-                  continue; // this can happen we we try to read from an invalid block
+                  continue; // this can happen when we try to read from an invalid block
 
               if (tmp.inumber == 0)
                   continue; // empty file
@@ -142,7 +249,6 @@ edfs_find_inode(edfs_image_t *img,
                   direntry.inumber = tmp.inumber;
                   found = true;
                   break; // no need to keep searching
-                  // TODO hoe werkt git
               }
           }
 
@@ -282,8 +388,6 @@ edfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     if (!edfs_find_inode(img, path, &inode))
     return -ENOENT;
 
-    fprintf(stderr, "filename %s, inodenumbver %d\n", path, (int)inode.inumber);
-
     if (!edfs_disk_inode_is_directory(&inode.inode))
     return -ENOTDIR;
 
@@ -295,6 +399,7 @@ edfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     * argument of the filler function is the filename you want to add.
     */
 
+    // TODO eigenlijk dir entries functie gebruiken en dan geen dubbele code etc.
     uint32_t n_entries = EDFS_INODE_N_DIRECT_BLOCKS * img->sb.block_size / sizeof(edfs_dir_entry_t);
     for (uint32_t i = 0; i < n_entries; i++)
     {
@@ -302,7 +407,7 @@ edfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
         uint32_t off = i * sizeof(edfs_dir_entry_t);
         int ret = edfs_read_inode_data(img, &inode, &tmp, sizeof(tmp), off);
         if (ret < 0)
-            return -1; // TODO goede error returnen?
+            return -1; 
         else if (ret == 0)
             continue;
 
@@ -318,23 +423,123 @@ edfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 static int
 edfuse_mkdir(const char *path, mode_t mode)
 {
-  /* TODO: implement.
-   *
-   * Create a new inode, register in parent directory, write inode to
-   * disk.
-   */
-  return -ENOSYS;
+    /* TODO: Fix
+     *
+     * Create a new inode, register in parent directory, write inode to
+     * disk.
+     */
+
+    edfs_image_t *img = get_edfs_image();
+
+    char *name = edfs_get_basename(path);
+    if (name == NULL)
+        return -ENOMSG;
+
+    int ret = edfs_check_filename(name);
+    if (ret != 0) {
+        free(name);
+        return ret;
+    }
+
+    edfs_inode_t parent_inode;
+    ret = edfs_get_parent_inode(img, path, &parent_inode);
+    if (ret != 0) {
+        free(name);
+        return ret;
+    }
+
+    edfs_inode_t inode;
+    ret = edfs_new_inode(img, &inode, EDFS_INODE_TYPE_DIRECTORY);
+    if (ret != 0) {
+        free(name);
+        return ret;
+    }
+
+    ret = edfs_write_inode(img, &inode);
+    if (ret < 0) {
+        free(name);
+        return ret;
+    }
+
+    ret = edfs_add_dir_entry(img, &parent_inode, name, inode.inumber);
+    if (ret != 0) {
+        free(name);
+        return ret;
+    }
+
+    free(name);
+
+    return 0;
 }
 
 static int
 edfuse_rmdir(const char *path)
 {
-  /* TODO: implement
-   *
-   * Validate @path exists and is a directory; remove directory entry
-   * from parent directory; release allocated blocks; release inode.
-   */
-  return -ENOSYS;
+    /* 
+     * Validate @path exists and is a directory; remove directory entry
+     * from parent directory; release allocated blocks; release inode.
+     */
+
+    edfs_image_t *img = get_edfs_image();
+
+    char *name = edfs_get_basename(path);
+    if (name == NULL)
+        return -ENOMSG;
+
+    int ret = edfs_check_filename(name); 
+    if (ret != 0) {
+        free(name);
+        return ret;
+    }
+
+    edfs_inode_t inode;
+    if (!edfs_find_inode(img, path, &inode)) {
+        free(name);
+        return -ENOENT;
+    }
+
+    /* check if dirisempty */
+    edfs_dir_entry_t entries[EDFS_MAX_DIR_ENTRIES];
+    ret = edfs_get_dir_entries(img, &inode, entries);
+    if (ret < 0) {
+        free(name);
+        return ret;
+    }
+    else if (ret != 0) {
+        free(name);
+        return -ENOTEMPTY;
+    }
+
+    edfs_inode_t parent_inode;
+    if (edfs_get_parent_inode(img, path, &parent_inode) != 0) {
+        free(name);
+        return -EIO; /* or ENOENT but this should not happen anyway */
+    }
+
+    /* remove in parent */
+    if (edfs_remove_dir_entry(img, &parent_inode, name) != 0) {
+        free(name);
+        return -EIO;
+    }
+
+    free(name);
+
+    /* After this point the the FS is corrupted if any of the following operations fail */
+      
+    for (int i = 0; i < EDFS_INODE_N_DIRECT_BLOCKS; i++)
+    {
+        edfs_block_t block = inode.inode.direct[i];
+        if (block == EDFS_BLOCK_INVALID)
+            continue;
+
+        edfs_bitmap_clear(img, block);
+    }
+
+    /* set inode to free state */
+    if (edfs_clear_inode(img, &inode) <= 0)
+        return -EIO;
+
+    return 0;
 }
 
 
@@ -360,13 +565,10 @@ edfuse_getattr(const char *path, struct stat *stbuf)
 
   edfs_inode_t inode;
   if (!edfs_find_inode(img, path, &inode)) {
-      fprintf(stderr, "getattr %s faal\n", path);
     res = -ENOENT;
   }
   else
     {
-  fprintf(stderr, "getattr %s %d\n", path, (int)inode.inumber);
-
       if (edfs_disk_inode_is_directory(&inode.inode))
         {
           stbuf->st_mode = S_IFDIR | 0770;
@@ -443,23 +645,21 @@ edfuse_read(const char *path, char *buf, size_t size, off_t offset,
     if (!edfs_find_inode(img, path, &inode))
         return -ENOENT;
 
-    // TODO klopt dit wel?
-    /*
-    size_t begin = offset; 
-    size_t end = offset + size;
-    if (inode.inode.size <= begin) || inode.inode.size < end) {
-        return -EINVAL;
-    }
-    */
-
     if (inode.inode.size <= offset)
         return -EINVAL;
 
-    uint32_t bytes_to_read = size;
+    if (inode.inode.type == EDFS_INODE_TYPE_DIRECTORY)
+        return -EISDIR;
+    else if (inode.inode.type != EDFS_INODE_TYPE_FILE)
+        return -EIO; // can happen when fs is corrupted
+
+    size_t bytes_to_read = size;
     if (inode.inode.size - offset < size)
         bytes_to_read = inode.inode.size - offset;
 
-    return edfs_read_inode_data(img, &inode, buf, bytes_to_read, offset);
+    // note: because we check the size of bytes_to_read the value always
+    // fits into a uint32_t hence the cast is valid
+    return edfs_read_inode_data(img, &inode, buf, (uint32_t)bytes_to_read, offset);
 }
 
 static int

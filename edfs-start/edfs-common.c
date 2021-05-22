@@ -70,6 +70,38 @@ edfs_read_super(edfs_image_t *img)
   return true;
 }
 
+int
+edfs_get_new_block(edfs_image_t *img, edfs_block_t *block) 
+{
+    uint8_t bitmap_data = 0x00;
+    edfs_block_t data_blk_start =
+        (img->sb.inode_table_start + img->sb.inode_table_size) / img->sb.block_size;
+    for (edfs_block_t i = data_blk_start; i < img->sb.n_blocks; i++)
+    {
+        uint32_t byte_off = i / 8;
+        int bit_off = i % 8;
+        if (bit_off == 0)
+        {
+            ssize_t ret = pread(img->fd, &bitmap_data, 1, byte_off);
+            if (ret < 0)
+                return -errno;
+            else if (ret != 1)
+                return -EIO;
+        }
+
+        if (!(bitmap_data & ((uint8_t)1 << bit_off)))
+        {
+            *block = i;
+            int ret = edfs_bitmap_set(img, *block);
+            if (ret != 0)
+                return ret;
+            return 0;
+        }
+    }
+
+    return -ENOSPC; /* all blocks are full */
+}
+
 edfs_image_t *
 edfs_image_open(const char *filename, bool read_super)
 {
@@ -108,17 +140,18 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
 {
     const uint16_t BLK_SIZE = img->sb.block_size;
 
-    // TODO hele berg checks size etc. kijken of id niet te groot is
-
+    if (id > EDFS_INODE_N_DIRECT_BLOCKS &&
+            id >= (inode->inode.size + BLK_SIZE - 1) / BLK_SIZE)
+        return -EINVAL;
+    
     edfs_block_t block;
     if (id < EDFS_INODE_N_DIRECT_BLOCKS) {
         block = inode->inode.direct[id];
     }
     else {
-        // DONE? mag je zelf doen
         edfs_block_t indirect_block = inode->inode.indirect;
-        if (indirect_block == 0) //TODO (0 -> EDFS_BLOCK_INVALID)?
-            return -EIO; // TODO ik weet niet precies was hier een handige error voor is
+        if (indirect_block == EDFS_BLOCK_INVALID)
+            return -EIO;
         off_t indirect_block_off = edfs_get_block_offset(&img->sb, indirect_block);
 
         edfs_block_t indirect_blocks[EDFS_MAX_BLOCK_SIZE / sizeof(edfs_block_t)];
@@ -126,25 +159,83 @@ static int edfs_read_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
 
         ssize_t ret = pread(img->fd, indirect_blocks, indirect_blocks_size, indirect_block_off);
         if (ret != indirect_blocks_size)
-            return -EIO; // DONE dit goed oplossen
+            return -EIO; 
 
         block = indirect_blocks[id - EDFS_INODE_N_DIRECT_BLOCKS];
     }
 
-    fprintf(stderr, "id == %d blocknumber = %d%c", (int)id, (int)block, '\n');
-
     if (block == EDFS_BLOCK_INVALID)
         return 0;
 
-    // TODO kijen of het block wel past, dan 0 padden ofzo als je daar nog zin
-    // in hebt
-
-    // DONE klopt het nu wel?
-    //off_t off = block * BLK_SIZE + img->sb.inode_table_start + img->sb.inode_table_size;
     off_t off = edfs_get_block_offset(&img->sb, block);
-    fprintf(stderr, "off = %d\n", (int)off);
     if (pread(img->fd, buf, BLK_SIZE, off) != BLK_SIZE)
-        return -1; // TODO goede error gebruiken
+        return -errno; 
+
+    return BLK_SIZE;
+}
+
+static int edfs_write_inode_data_blk(edfs_image_t *img, edfs_inode_t *inode,
+                                    uint32_t id, const void *buf)
+{
+    const uint16_t BLK_SIZE = img->sb.block_size;
+
+    if (id > EDFS_INODE_N_DIRECT_BLOCKS &&
+            id >= (inode->inode.size + BLK_SIZE - 1) / BLK_SIZE)
+        return -EINVAL;
+
+    edfs_block_t block;
+    if (id < EDFS_INODE_N_DIRECT_BLOCKS) {
+        block = inode->inode.direct[id];
+
+        // add block if necessary 
+        if (block == EDFS_BLOCK_INVALID) {
+            int ret = edfs_get_new_block(img, &block);
+            if (ret != 0)
+                return ret;
+
+            inode->inode.direct[id] = block;
+            ret = edfs_write_inode(img, inode);
+            if (ret < 0) {
+                /* we might as well try to free the newly allocated block */
+                edfs_bitmap_clear(img, block);
+                return ret;
+            }
+        }
+    }
+    else {
+        edfs_block_t indirect_block = inode->inode.indirect;
+        if (indirect_block == EDFS_BLOCK_INVALID)
+            return -EIO; // TODO dit kan ook wel eens mis gaan, maar nu nog niet
+        off_t indirect_block_off = edfs_get_block_offset(&img->sb, indirect_block);
+
+        edfs_block_t indirect_blocks[EDFS_MAX_BLOCK_SIZE / sizeof(edfs_block_t)];
+        int indirect_blocks_size = img->sb.block_size;
+
+        ssize_t ret = pread(img->fd, indirect_blocks, indirect_blocks_size, indirect_block_off);
+        if (ret != indirect_blocks_size)
+            return -EIO; 
+
+        block = indirect_blocks[id - EDFS_INODE_N_DIRECT_BLOCKS];
+
+        // add block if necessary
+        if (block == EDFS_BLOCK_INVALID) {
+            int iret = edfs_get_new_block(img, &block);
+            if (iret != 0)
+                return iret;
+            
+            indirect_blocks[id - EDFS_INODE_N_DIRECT_BLOCKS] = block;
+            ret = pwrite(img->fd, indirect_blocks, indirect_blocks_size, indirect_block_off);
+            if (ret != indirect_blocks_size)
+            {
+                edfs_bitmap_clear(img, block);
+                return ret;
+            }
+        }
+    }
+
+    off_t off = edfs_get_block_offset(&img->sb, block);
+    if (pwrite(img->fd, buf, BLK_SIZE, off) != BLK_SIZE)
+        return -errno; 
 
     return BLK_SIZE;
 }
@@ -176,7 +267,6 @@ edfs_read_root_inode(edfs_image_t *img,
                      edfs_inode_t *inode)
 {
   inode->inumber = img->sb.root_inumber;
-  fprintf(stderr, "root inode = %d", (int)img->sb.root_inumber);
   return edfs_read_inode(img, inode);
 }
 
@@ -257,10 +347,9 @@ edfs_read_inode_data(edfs_image_t *img,
                      uint32_t size,
                      uint32_t off)
 {
-    // TODO dingen verifoereren 
+    // TODO dingen verifiereren 
 
     const uint16_t BLK_SIZE = img->sb.block_size;
-    printf("blk _size %d\n", (int)BLK_SIZE);
 
     for (uint32_t pos = off; pos < off + size; )
     {
@@ -270,19 +359,115 @@ edfs_read_inode_data(edfs_image_t *img,
         if (blk_size > BLK_SIZE - blk_off)
             blk_size = BLK_SIZE - blk_off;
 
-        fprintf(stderr, "reading blk = %d from %d to %d\n",
-            (int)blk_id, (int)blk_off, (int)(blk_off + blk_size));
-
         char blk_buf[EDFS_MAX_BLOCK_SIZE];
         int ret = edfs_read_inode_data_blk(img, inode, blk_id, blk_buf);
         if (ret <= 0)
             return ret;
 
-        memcpy(buf + (pos - off), blk_buf + blk_off, blk_size);
+        memcpy((char *)buf + (pos - off), blk_buf + blk_off, blk_size);
 
         pos += blk_size;
     }
 
     return size;
+}
+
+int
+edfs_write_inode_data(edfs_image_t *img,
+                     edfs_inode_t *inode,
+                     const void *buf,
+                     uint32_t size,
+                     uint32_t off)
+{
+    // TODO dingen verifiereren 
+
+    const uint16_t BLK_SIZE = img->sb.block_size;
+
+    for (uint32_t pos = off; pos < off + size; )
+    {
+        uint32_t blk_id = pos / BLK_SIZE;
+        uint32_t blk_off = pos % BLK_SIZE;
+        uint32_t blk_size = (off + size) - pos;
+        if (blk_size > BLK_SIZE - blk_off)
+            blk_size = BLK_SIZE - blk_off;
+
+        char blk_buf[EDFS_MAX_BLOCK_SIZE];
+
+        int ret = edfs_read_inode_data_blk(img, inode, blk_id, blk_buf);
+        if (ret < 0)
+            return ret;
+        else if (ret == 0) /* block is not allocated */
+            memset(blk_buf, 0, BLK_SIZE);
+
+        memcpy(blk_buf + blk_off, (char *)buf + (pos - off), blk_size);
+
+        ret = edfs_write_inode_data_blk(img, inode, blk_id, blk_buf);
+        if (ret <= 0)
+            return ret;
+
+
+        pos += blk_size;
+    }
+
+    return size;
+}
+
+
+int
+edfs_bitmap_clear(edfs_image_t *img, edfs_block_t block)
+{
+    //check if block number is valid
+    if (block >= img->sb.n_blocks)
+        return -EINVAL;
+
+    size_t byte_off = img->sb.bitmap_start + (block / 8);
+    int bit_off = block % 8;
+
+    uint8_t bitmap_data;
+    
+    ssize_t ret = pread(img->fd, &bitmap_data, 1, byte_off);
+    if (ret < 0)
+        return -errno;
+    else if (ret != 1)
+        return -EIO;
+    
+    bitmap_data &= ~(((uint8_t)1) << bit_off);
+    
+    ret = pwrite(img->fd, &bitmap_data, 1, byte_off);
+    if (ret < 0)
+        return -errno;
+    else if (ret != 1)
+        return -EIO;
+
+    return 0;
+}
+
+int
+edfs_bitmap_set(edfs_image_t *img, edfs_block_t block)
+{
+    //check if block number is valid
+    if (block >= img->sb.n_blocks)
+        return -EINVAL;
+
+    size_t byte_off = img->sb.bitmap_start + block / 8;
+    int bit_off = block % 8;
+
+    uint8_t bitmap_data;
+    
+    ssize_t ret = pread(img->fd, &bitmap_data, 1, byte_off);
+    if (ret < 0)
+        return -errno;
+    else if (ret != 1)
+        return -EIO;
+    
+    bitmap_data |= ((uint8_t)1) << bit_off;
+    
+    ret = pwrite(img->fd, &bitmap_data, 1, byte_off);
+    if (ret < 0)
+        return -errno;
+    else if (ret != 1)
+        return -EIO;
+
+    return 0;
 }
 

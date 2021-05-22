@@ -28,6 +28,9 @@ typedef uint16_t edfs_block_t;
  */
 #define EDFS_BLOCK_INVALID 0
 
+#define EDFS_MAX_DIR_ENTRIES (EDFS_INODE_N_DIRECT_BLOCKS *  \
+                              EDFS_MAX_BLOCK_SIZE /         \
+                              sizeof(edfs_dir_entry_t))
 
 /*
  * Super block
